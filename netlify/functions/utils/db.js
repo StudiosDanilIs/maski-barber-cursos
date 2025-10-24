@@ -1,9 +1,13 @@
 const { Client } = require('pg');
 const jwt = require('jsonwebtoken');
 
-// Función para inicializar y conectar el cliente PG
 function getDbClient() {
-    // La conexión usa la variable de entorno configurada en Netlify
+    // ESTE ES EL PUNTO DONDE SE USA LA VARIABLE DE NETLIFY
+    if (!process.env.DATABASE_URL) {
+        // Esto te ayudará a diagnosticar si la variable no se cargó
+        throw new Error("DATABASE_URL no está configurada en el entorno.");
+    }
+
     return new Client({
         connectionString: process.env.DATABASE_URL
     });
