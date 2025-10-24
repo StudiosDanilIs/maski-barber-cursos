@@ -1,0 +1,9 @@
+[build]
+  publish = "public"     # Directorio que será desplegado
+  functions = "netlify/functions" # Directorio de las Netlify Functions
+
+# Regla de Redirección (Opcional, pero útil para SPA/enrutamiento)
+# [[redirects]]
+#   from = "/*"
+#   to = "/index.html"
+#   status = 200

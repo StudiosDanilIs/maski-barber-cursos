@@ -1,55 +1,60 @@
-const { Client } = require('pg');
-const jwt = require('jsonwebtoken');
+const { getDbClient, authenticateToken } = require('./utils/db');
 
-// Función de utilidad para verificar JWT (debes crearla)
-const verifyToken = (token) => jwt.verify(token, process.env.JWT_SECRET); 
-
-exports.handler = async (event, context) => {
+async function downloadHandler(event, context) {
+    if (event.httpMethod !== 'GET') return { statusCode: 405, body: 'Método no permitido' };
+    
     const courseId = event.queryStringParameters.courseId;
-    const authHeader = event.headers.authorization;
-    const token = authHeader?.split(' ')[1];
+    const userId = event.user.userId;
+    const MAX_DOWNLOADS = 3; 
 
-    if (!token) return { statusCode: 401, body: JSON.stringify({ message: 'No autorizado' }) };
+    if (!courseId) return { statusCode: 400, body: 'Falta el ID del curso.' };
 
+    const client = getDbClient();
     try {
-        const decoded = verifyToken(token);
-        const client = new Client({ connectionString: process.env.DATABASE_URL });
         await client.connect();
 
-        // 1. Verificar inscripción y contador de descargas
+        // 1. Verificar inscripción, estado y contador
         const checkRes = await client.query(
             `SELECT t1.download_count, t2.video_drive_url 
              FROM enrollments t1 JOIN courses t2 ON t1.course_id = t2.id
-             WHERE t1.user_id = $1 AND t1.course_id = $2 AND t1.status = 'accepted'`,
-            [decoded.userId, courseId]
+             WHERE t1.user_id = $1 AND t1.course_id = $2 AND t1.status = 'accepted' FOR UPDATE`, // FOR UPDATE bloquea la fila
+            [userId, courseId]
         );
 
         const enrollment = checkRes.rows[0];
 
         if (!enrollment) {
-            return { statusCode: 403, body: JSON.stringify({ message: 'No estás inscrito o tu inscripción está pendiente.' }) };
+            return { statusCode: 403, body: JSON.stringify({ message: 'No tiene acceso a este curso o inscripción pendiente.' }) };
         }
 
-        if (enrollment.download_count >= 3) {
-            return { statusCode: 403, body: JSON.stringify({ message: 'Límite de 3 descargas alcanzado.' }) };
+        if (enrollment.download_count >= MAX_DOWNLOADS) {
+            return { statusCode: 403, body: JSON.stringify({ message: `Límite de ${MAX_DOWNLOADS} descargas alcanzado.` }) };
         }
 
-        // 2. Incrementar el contador y obtener la URL
+        // 2. Incrementar el contador (Transacción implícita por FOR UPDATE)
         await client.query(
             `UPDATE enrollments SET download_count = download_count + 1 
              WHERE user_id = $1 AND course_id = $2`,
-            [decoded.userId, courseId]
+            [userId, courseId]
         );
 
-        // NOTA: La URL de Drive DEBE ser un enlace de descarga directa. 
-        // Si usas la API de Google Drive, aquí es donde generarías el enlace temporal.
-        const downloadUrl = enrollment.video_drive_url; 
-
+        // 3. Devolver la URL de descarga
+        const downloadsLeft = MAX_DOWNLOADS - (enrollment.download_count + 1);
+        
         return { 
             statusCode: 200, 
-            body: JSON.stringify({ url: downloadUrl, downloadsLeft: 3 - (enrollment.download_count + 1) }) 
+            body: JSON.stringify({ 
+                url: enrollment.video_drive_url, 
+                downloadsLeft: downloadsLeft,
+                message: `Descarga iniciada. Te quedan ${downloadsLeft} descargas.` 
+            }) 
         };
     } catch (error) {
-        return { statusCode: 401, body: JSON.stringify({ message: 'Token inválido o expirado' }) };
+        console.error('Error de descarga:', error);
+        return { statusCode: 500, body: JSON.stringify({ message: 'Error interno en el servidor.' }) };
+    } finally {
+        await client.end();
     }
-};
+}
+
+exports.handler = authenticateToken(downloadHandler);
