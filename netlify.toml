@@ -1,3 +1,0 @@
-[build]
-  publish = "public"     # Carpeta del Frontend
-  functions = "netlify/functions" # Carpeta del Backend
