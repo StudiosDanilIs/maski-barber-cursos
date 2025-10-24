@@ -1,9 +1,11 @@
 const { getDbClient, authenticateToken } = require('./utils/db');
 
 async function adminHandler(event, context) {
+    // 1. Verificar Rol de Administrador
     const user = event.user;
-    if (user.role !== 'admin') {
-        return { statusCode: 403, body: JSON.stringify({ message: 'Acceso denegado. Solo administradores.' }) };
+    if (user.role !== 'admin' && event.user.role !== 'student') {
+        // Permitimos acceso al estudiante solo para la acción getCoursesAndStatus
+        return { statusCode: 403, body: JSON.stringify({ message: 'Acceso denegado. Se requiere rol de administrador.' }) };
     }
 
     const { action, ...payload } = event.queryStringParameters || {};
@@ -16,8 +18,9 @@ async function adminHandler(event, context) {
         switch (action) {
             // --- LECTURA ---
             case 'getPendingEnrollments':
+                if (user.role !== 'admin') return { statusCode: 403, body: JSON.stringify({ message: 'No autorizado.' }) };
                 const pendingRes = await client.query(`
-                    SELECT e.id, e.personal_info, e.payment_capture_url, u.email, c.title 
+                    SELECT e.id, e.personal_info, e.payment_capture_url, u.email, c.title, c.id AS course_id
                     FROM enrollments e 
                     JOIN users u ON e.user_id = u.id
                     JOIN courses c ON e.course_id = c.id
@@ -26,22 +29,23 @@ async function adminHandler(event, context) {
                 return { statusCode: 200, body: JSON.stringify(pendingRes.rows) };
 
             case 'getCoursesAndStatus':
-                // Usado tanto por Admin (todos) como Estudiante (arriba)
+                // Permite a cualquier usuario autenticado ver los cursos
                 const allCoursesRes = await client.query('SELECT * FROM courses');
                 
-                // Si es estudiante, también devuelve sus inscripciones para el dashboard
                 if (user.role === 'student') {
+                    // Si es estudiante, solo devuelve sus inscripciones
                     const studentEnrollmentsRes = await client.query('SELECT course_id, status, download_count FROM enrollments WHERE user_id = $1', [user.userId]);
                     return { 
                         statusCode: 200, 
                         body: JSON.stringify({ courses: allCoursesRes.rows, enrollments: studentEnrollmentsRes.rows }) 
                     };
                 }
+                // Si es admin, solo devuelve la lista de cursos
                 return { statusCode: 200, body: JSON.stringify({ courses: allCoursesRes.rows }) };
 
-            // --- ESCRITURA (POST) ---
+            // --- ESCRITURA (ADMIN ONLY) ---
             case 'addCourse':
-                if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Método no permitido' };
+                if (user.role !== 'admin' || event.httpMethod !== 'POST') return { statusCode: 403, body: 'No autorizado/Método no permitido' };
                 const { title, description, videoUrl } = body;
                 const insertRes = await client.query(
                     'INSERT INTO courses (title, description, video_drive_url) VALUES ($1, $2, $3) RETURNING *',
@@ -50,7 +54,7 @@ async function adminHandler(event, context) {
                 return { statusCode: 201, body: JSON.stringify({ message: 'Curso agregado.', course: insertRes.rows[0] }) };
 
             case 'updateEnrollmentStatus':
-                if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Método no permitido' };
+                if (user.role !== 'admin' || event.httpMethod !== 'POST') return { statusCode: 403, body: 'No autorizado/Método no permitido' };
                 const { enrollmentId, newStatus } = body;
                 if (!['accepted', 'rejected'].includes(newStatus)) {
                     return { statusCode: 400, body: JSON.stringify({ message: 'Estado no válido.' }) };
@@ -63,11 +67,10 @@ async function adminHandler(event, context) {
         }
     } catch (error) {
         console.error('Admin Error:', error);
-        return { statusCode: 500, body: JSON.stringify({ message: 'Error interno del servidor.' }) };
+        return { statusCode: 500, body: JSON.stringify({ message: 'Error interno del servidor. Revisa DB.' }) };
     } finally {
         await client.end();
     }
 }
 
-// Envuelve la función con la autenticación
 exports.handler = authenticateToken(adminHandler);

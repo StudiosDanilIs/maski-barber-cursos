@@ -13,25 +13,26 @@ async function downloadHandler(event, context) {
     try {
         await client.connect();
 
-        // 1. Verificar inscripción, estado y contador
+        // 1. Verificar inscripción, estado y contador de descargas
         const checkRes = await client.query(
+            // FOR UPDATE bloquea la fila para evitar descargas dobles al mismo tiempo
             `SELECT t1.download_count, t2.video_drive_url 
              FROM enrollments t1 JOIN courses t2 ON t1.course_id = t2.id
-             WHERE t1.user_id = $1 AND t1.course_id = $2 AND t1.status = 'accepted' FOR UPDATE`, // FOR UPDATE bloquea la fila
+             WHERE t1.user_id = $1 AND t1.course_id = $2 AND t1.status = 'accepted' FOR UPDATE`, 
             [userId, courseId]
         );
 
         const enrollment = checkRes.rows[0];
 
         if (!enrollment) {
-            return { statusCode: 403, body: JSON.stringify({ message: 'No tiene acceso a este curso o inscripción pendiente.' }) };
+            return { statusCode: 403, body: JSON.stringify({ message: 'No estás inscrito o tu inscripción está pendiente.' }) };
         }
 
         if (enrollment.download_count >= MAX_DOWNLOADS) {
             return { statusCode: 403, body: JSON.stringify({ message: `Límite de ${MAX_DOWNLOADS} descargas alcanzado.` }) };
         }
 
-        // 2. Incrementar el contador (Transacción implícita por FOR UPDATE)
+        // 2. Incrementar el contador 
         await client.query(
             `UPDATE enrollments SET download_count = download_count + 1 
              WHERE user_id = $1 AND course_id = $2`,
@@ -50,7 +51,7 @@ async function downloadHandler(event, context) {
             }) 
         };
     } catch (error) {
-        console.error('Error de descarga:', error);
+        console.error('Download Error:', error);
         return { statusCode: 500, body: JSON.stringify({ message: 'Error interno en el servidor.' }) };
     } finally {
         await client.end();
